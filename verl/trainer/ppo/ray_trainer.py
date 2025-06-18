@@ -452,6 +452,7 @@ class RayPPOTrainer(object):
             no_think_rl=self.config.algorithm.no_think_rl,
             search_url = self.config.retriever.url,
             topk = self.config.retriever.topk,
+            use_local_indexer = self.config.get('use_local_indexer', False),
         )
 
         # Agent config preparation
@@ -508,6 +509,10 @@ class RayPPOTrainer(object):
                     'do_sample': False,
                     'validate': True,
                 }
+                support_text = None
+                if gen_config.use_local_indexer:
+                    support_proto = test_batch.pop(batch_keys=[], non_tensor_batch_keys=['support'])
+                    support_text = support_proto.non_tensor_batch['support'].tolist()
                 with _timer('step', timing_raw):
                     first_input_ids = test_gen_batch.batch['input_ids'][:, -gen_config.max_start_length:].clone()
                     with _timer('gen', timing_raw):
@@ -515,6 +520,7 @@ class RayPPOTrainer(object):
                         final_gen_batch_output = generation_manager.run_llm_loop(
                             gen_batch=test_gen_batch,
                             initial_input_ids=first_input_ids,
+                            support=support_text,
                         )
                     
                     test_batch = test_batch.union(final_gen_batch_output)
@@ -683,6 +689,7 @@ class RayPPOTrainer(object):
             no_think_rl=self.config.algorithm.no_think_rl,
             search_url = self.config.retriever.url,
             topk = self.config.retriever.topk,
+            use_local_indexer = self.config.get('use_local_indexer', False),
         )
 
         generation_manager = LLMGenerationManager(
@@ -703,6 +710,10 @@ class RayPPOTrainer(object):
 
                 # pop those keys for generation
                 gen_batch = batch.pop(batch_keys=['input_ids', 'attention_mask', 'position_ids'])
+                support_text = None
+                if gen_config.use_local_indexer:
+                    support_proto = batch.pop(batch_keys=[], non_tensor_batch_keys=['support'])
+                    support_text = support_proto.non_tensor_batch['support'].tolist()
 
                 ####################
                 # original code here
@@ -726,10 +737,11 @@ class RayPPOTrainer(object):
 
                         with _timer('gen', timing_raw):
                             generation_manager.timing_raw = timing_raw
-                            final_gen_batch_output = generation_manager.run_llm_loop(
-                                gen_batch=gen_batch,
-                                initial_input_ids=first_input_ids,
-                            )
+                        final_gen_batch_output = generation_manager.run_llm_loop(
+                            gen_batch=gen_batch,
+                            initial_input_ids=first_input_ids,
+                            support=support_text,
+                        )
 
                         # final_gen_batch_output.batch.apply(lambda x: x.long(), inplace=True)
                         for key in final_gen_batch_output.batch.keys():
