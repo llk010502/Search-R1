@@ -87,5 +87,5 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     max_turns=2 \
     retriever.url=null \
     retriever.topk=3 \
-    generation.use_local_indexer=true 
+    use_local_indexer=true
     2>&1 | tee $EXPERIMENT_NAME.log
