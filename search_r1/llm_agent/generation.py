@@ -9,6 +9,7 @@ from verl import DataProto
 from verl.utils.tracking import Tracking
 import shutil
 import requests
+from search_r1.search.document_indexer import DocumentIndexer
 
 @dataclass
 class GenerationConfig:
@@ -21,6 +22,7 @@ class GenerationConfig:
     no_think_rl: bool=False
     search_url: str = None
     topk: int = 3
+    use_local_indexer: bool = False
 
 class LLMGenerationManager:
     def __init__(
@@ -41,6 +43,8 @@ class LLMGenerationManager:
             max_obs_length=config.max_obs_length,
             max_start_length=config.max_start_length
         ))
+
+        self.indexers = None
 
     def _batch_tokenize(self, responses: List[str]) -> torch.Tensor:
         """Tokenize a batch of responses."""
@@ -217,11 +221,14 @@ class LLMGenerationManager:
         padded_output.batch = trimmed_batch
         return padded_output
 
-    def run_llm_loop(self, gen_batch, initial_input_ids: torch.Tensor) -> Tuple[Dict, Dict]:
+    def run_llm_loop(self, gen_batch, initial_input_ids: torch.Tensor, support: List[str] = None) -> Tuple[Dict, Dict]:
         """Run main LLM generation loop."""
         
         original_left_side = {'input_ids': initial_input_ids[:, -self.config.max_start_length:]}
         original_right_side = {'responses': initial_input_ids[:, []], 'responses_with_info_mask': initial_input_ids[:, []]}
+
+        if self.config.use_local_indexer and support is not None:
+            self.indexers = [DocumentIndexer(s) for s in support]
         
         active_mask = torch.ones(gen_batch.batch['input_ids'].shape[0], dtype=torch.bool)
         turns_stats = torch.ones(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
@@ -367,12 +374,18 @@ class LLMGenerationManager:
         cur_actions, contents = self.postprocess_predictions(predictions)
         next_obs, dones, valid_action, is_search = [], [], [], []
         
-        search_queries = [content for action, content in zip(cur_actions, contents) if action == 'search']
+        search_queries = [(idx, content) for idx, (action, content) in enumerate(zip(cur_actions, contents)) if action == 'search']
         if do_search:
-            search_results = self.batch_search(search_queries)
-            assert len(search_results) == sum([1 for action in cur_actions if action == 'search'])
+            if self.config.use_local_indexer:
+                query_text = [q for _, q in search_queries]
+                query_idxs = [idx for idx, _ in search_queries]
+                search_results = self.batch_search(query_text, query_idxs)
+            else:
+                query_text = [q for _, q in search_queries]
+                search_results = self.batch_search(query_text)
+            assert len(search_results) == len(search_queries)
         else:
-            search_results = [''] * sum([1 for action in cur_actions if action == 'search'])
+            search_results = [''] * len(search_queries)
 
         for i, (action, active) in enumerate(zip(cur_actions, active_mask)):
             
@@ -435,7 +448,7 @@ If I want to give the final answer, I should put the answer between <answer> and
             
         return actions, contents
 
-    def batch_search(self, queries: List[str] = None) -> str:
+    def batch_search(self, queries: List[str] = None, idxs: List[int] = None) -> str:
         """
         Batchified search for queries.
         Args:
@@ -443,18 +456,24 @@ If I want to give the final answer, I should put the answer between <answer> and
         Returns:
             search results which is concatenated into a string
         """
-        results = self._batch_search(queries)['result']
+        results = self._batch_search(queries, idxs)['result']
         
         return [self._passages2string(result) for result in results]
 
-    def _batch_search(self, queries):
-        
+    def _batch_search(self, queries, idxs=None):
+        if self.config.use_local_indexer:
+            assert idxs is not None
+            results = []
+            for q, i in zip(queries, idxs):
+                results.append(self.indexers[i].search(q, topk=self.config.topk))
+            return {"result": results}
+
         payload = {
             "queries": queries,
             "topk": self.config.topk,
             "return_scores": True
         }
-        
+
         return requests.post(self.config.search_url, json=payload).json()
 
     def _passages2string(self, retrieval_result):
