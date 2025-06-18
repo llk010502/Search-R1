@@ -511,8 +511,8 @@ class RayPPOTrainer(object):
                 }
                 support_text = None
                 if gen_config.use_local_indexer:
-                    support_proto = test_batch.pop(batch_keys=[], non_tensor_batch_keys=['support'])
-                    support_text = support_proto.non_tensor_batch['support'].tolist()
+                    support_arr = test_batch.non_tensor_batch.pop('support', None)
+                    support_text = support_arr.tolist() if support_arr is not None else None
                 with _timer('step', timing_raw):
                     first_input_ids = test_gen_batch.batch['input_ids'][:, -gen_config.max_start_length:].clone()
                     with _timer('gen', timing_raw):
@@ -712,8 +712,8 @@ class RayPPOTrainer(object):
                 gen_batch = batch.pop(batch_keys=['input_ids', 'attention_mask', 'position_ids'])
                 support_text = None
                 if gen_config.use_local_indexer:
-                    support_proto = batch.pop(batch_keys=[], non_tensor_batch_keys=['support'])
-                    support_text = support_proto.non_tensor_batch['support'].tolist()
+                    support_arr = batch.non_tensor_batch.pop('support', None)
+                    support_text = support_arr.tolist() if support_arr is not None else None
 
                 ####################
                 # original code here
