@@ -16,6 +16,11 @@ import re
 import string
 import random
 
+
+def extract_number(text: str) -> float | None:
+    m = re.search(r'[-+]?\d*\.\d+|\d+', text.replace(',', ''))
+    return float(m.group()) if m else None
+
 def normalize_answer(s):
     def remove_articles(text):
         return re.sub(r"\b(a|an|the)\b", " ", text)
@@ -30,20 +35,23 @@ def normalize_answer(s):
     def lower(text):
         return text.lower()
 
-    return white_space_fix(remove_articles(remove_punc(lower(s))))
+    normalized = white_space_fix(remove_articles(remove_punc(lower(s))))
+    num = extract_number(normalized)
+    return str(num).rstrip('0').rstrip('.') if num is not None else normalized
 
 
-def em_check(prediction, golden_answers):
+def em_check(prediction, golden_answers, tol=1e-5):
     if isinstance(golden_answers, str):
         golden_answers = [golden_answers]
-    normalized_prediction = normalize_answer(prediction)
-    score = 0
-    for golden_answer in golden_answers:
-        golden_answer = normalize_answer(golden_answer)
-        if golden_answer == normalized_prediction:
-            score = 1
-            break
-    return score
+    pred_num = extract_number(prediction)
+    for golden in golden_answers:
+        gold_num = extract_number(golden)
+        if pred_num is not None and gold_num is not None:
+            if abs(pred_num - gold_num) <= tol:
+                return 1
+        if normalize_answer(golden) == normalize_answer(prediction):
+            return 1
+    return 0
 
 
 def subem_check(prediction, golden_answers):
