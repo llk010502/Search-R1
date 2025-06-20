@@ -18,6 +18,7 @@ The main entry point to run the PPO algorithm
 import logging
 import os
 import warnings
+from peft import LoraConfig, TaskType, get_peft_model
 
 import torch
 import torch.distributed
@@ -42,6 +43,18 @@ from codetiming import Timer
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv('VERL_PPO_LOGGING_LEVEL', 'WARN'))
+
+
+def convert_to_regular_types(obj):
+    """Convert Hydra configs and other special types to regular Python types."""
+    from omegaconf import ListConfig, DictConfig
+    if isinstance(obj, (ListConfig, DictConfig)):
+        return {k: convert_to_regular_types(v) for k, v in obj.items()} if isinstance(obj, DictConfig) else list(obj)
+    elif isinstance(obj, (list, tuple)):
+        return [convert_to_regular_types(x) for x in obj]
+    elif isinstance(obj, dict):
+        return {k: convert_to_regular_types(v) for k, v in obj.items()}
+    return obj
 
 
 class ActorRolloutRefWorker(Worker):
@@ -169,6 +182,17 @@ class ActorRolloutRefWorker(Worker):
             # some parameters may not in torch_dtype. TODO(zhangchi.usc1992) remove this after we switch to fsdp2
             actor_module.to(torch_dtype)
 
+            if self.config.model.get('lora_rank', 0) > 0:
+                actor_module.enable_input_require_grads()
+                lora_config = {
+                    'task_type': TaskType.CAUSAL_LM,
+                    'r': self.config.model.lora_rank,
+                    'lora_alpha': self.config.model.lora_alpha,
+                    'target_modules': convert_to_regular_types(self.config.model.target_modules),
+                    'bias': "none"
+                }
+                actor_module = get_peft_model(actor_module, LoraConfig(**lora_config))
+
             if enable_gradient_checkpointing:
                 actor_module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
         torch.distributed.barrier()
@@ -194,7 +218,9 @@ class ActorRolloutRefWorker(Worker):
         if self._is_ref:
             mixed_precision = None
 
-        auto_wrap_policy = get_fsdp_wrap_policy(module=actor_module, config=fsdp_config.get('wrap_policy', None))
+        auto_wrap_policy = get_fsdp_wrap_policy(module=actor_module,
+                                               config=fsdp_config.get('wrap_policy', None),
+                                               is_lora=self.config.model.get('lora_rank', 0) > 0)
 
         if self._is_rollout and self.config.rollout.name == 'hf':
             # TODO(zhangchi.usc1992, shengguangming) fix me. Current, auto_wrap_policy causes HFRollout to hang in Gemma
@@ -646,7 +672,9 @@ class CriticWorker(Worker):
 
         mixed_precision = MixedPrecision(param_dtype=param_dtype, reduce_dtype=reduce_dtype, buffer_dtype=buffer_dtype)
 
-        auto_wrap_policy = get_fsdp_wrap_policy(module=critic_module, config=self.config.model.fsdp_config.wrap_policy)
+        auto_wrap_policy = get_fsdp_wrap_policy(module=critic_module,
+                                               config=self.config.model.fsdp_config.wrap_policy,
+                                               is_lora=self.config.model.get('lora_rank', 0) > 0)
 
         log_gpu_memory_usage('Before critic FSDP', logger=None)
 
