@@ -22,6 +22,9 @@ actor_rollout_ref:
     external_lib: null
     override_config: { }
     enable_gradient_checkpointing: False
+    lora_rank: 0
+    lora_alpha: 16
+    target_modules: [q_proj, v_proj]
     use_remove_padding: False
   actor:
     strategy: fsdp  # This is for backward-compatibility
@@ -104,6 +107,9 @@ critic:
     override_config: { }
     external_lib: ${actor_rollout_ref.model.external_lib}
     enable_gradient_checkpointing: False
+    lora_rank: 0
+    lora_alpha: 16
+    target_modules: [q_proj, v_proj]
     use_remove_padding: False
     fsdp_config:
       param_offload: False
